@@ -1,25 +1,3 @@
-//How to run?
-//===========
-//
-//Single precision :
-//
-//nvcc -O3 q2.cu ; ./a.out -s
-//nvcc -O3 q2.cu ; ./a.out -p <thread_num>
-//nvcc -O3 q2.cu ; ./a.out -c
-//
-//with verification:
-//
-//nvcc -O3 q2.cu ; ./a.out -s -v
-//nvcc -O3 q2.cu ; ./a.out -p <thread_num> -v
-//nvcc -O3 q2.cu ; ./a.out -c -v
-//
-//Double precision: 
-//
-//Add -D DP flag. Ex-
-//
-//nvcc -O3 -D DP q2.cu ; ./a.out -p <thread_num>
-
-
 #include <stdlib.h>
 #include <stdio.h>
 #include <cuda.h>
@@ -33,48 +11,26 @@
 #define GET_TIME(x);  if (clock_gettime(CLOCK_MONOTONIC, &(x)) < 0) \
 { perror("clock_gettime( ):"); exit(EXIT_FAILURE); }
 
-// CUDA related
+
+#define VECTOR_SIZE 10000000  
+// #define VECTOR_SIZE 50000000
+// #define VECTOR_SIZE 100000000  
+
+// for the calculations of cuda 
 #define THREADS_PER_BLOCK 256
 #define CALCS_PER_THREAD 50
 
-// PThread related
+// for PThreads
 #define MAX_PTHREADS 8
 
-#define VECTOR_SIZE 10000000  //1e7
-// #define VECTOR_SIZE 5  //1e8
 
-//Code to check for GPU errors
-#define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
-inline void gpuAssert(cudaError_t code, char *file, int line, bool abort=true)
-{
- if (code != cudaSuccess) 
- {
-  fprintf(stderr,"GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
-  if (abort) exit(code);
-}
-}
-//Help code for switching between Single Precision and Double Precision
-#ifdef DP
+#ifdef DP                    	// for the Double precision 
 typedef double Real;
-#else
+#else				// for the single precision
 typedef float Real;
 #endif
 
-/**
- * Shows the usage of the program.
- */
- void print_usage(){
- 	printf("Wrong usage!\n");
- }
 
-/**
- * Measures the time differences
- * @param  begin begin time
- * @param  end   end time
- * @param  sec   resulting time in seconds
- * @param  nsec  resulting time in nano-seconds
- * @return       the time taken
- */
  float elapsed_time_msec(struct timespec *begin, struct timespec *end, long *sec, long *nsec)
  {
   if (end->tv_nsec < begin->tv_nsec) {
@@ -88,117 +44,31 @@ typedef float Real;
   return (float) (*sec) * 1000 + ((float) (*nsec)) / 1000000;
 }
 
-void print_vector(Real vector[]){
-  printf("---------------------------------------------------------------\n");
-  for(long i=0;i<VECTOR_SIZE;i++){
-		#ifdef DP
-   printf("%ld --> %20.18f\n",i,vector[i]);
 
-        #else
-   printf("%ld --> %f\n",i,vector[i]);
-
-
-        #endif
- }
- printf("---------------------------------------------------------------\n");
-}
-
-static unsigned long inKB(unsigned long bytes)
-
-{ return bytes/1024; }
-
-
-
-static unsigned long inMB(unsigned long bytes)
-
-{ return bytes/(1024*1024); }
-
-
-/**
- * Used to print memory states in the GPU
- */
- static void printStats()
-
- {
-
-  size_t free, total;
-
-  CUresult res = cuMemGetInfo(&free, &total);
-
-  if(res != CUDA_SUCCESS){
-   printf("!!!! cuMemGetInfo failed! (status = %x)", res);
-   return;
-
- }
-
- printf("---------------------------------------------------------------\n");
-
- printf("^^^^ Free : %lu bytes (%lu KB) (%lu MB)\n", free, inKB(free), inMB(free));
-
- printf("^^^^ Total: %lu bytes (%lu KB) (%lu MB)\n", total, inKB(total), inMB(total));
-
- printf("^^^^ %f%% free, %f%% used\n", 100.0*free/(double)total, 100.0*(total - free)/(double)total);
- printf("---------------------------------------------------------------\n");
-
-}
-
-
-/**
- * Initializes a given vector with values between 1 and 2
- * @param vector The vector that needs to be initialized
- */
- void initialize_vector(Real vector[]){
+ void init_vector(Real vector[]){
  	for(long i=0;i<VECTOR_SIZE;i++){
-    vector[i]=(rand() / (float) RAND_MAX)+1;
- 		// vector[i]=1.0f;
+    vector[i]=(rand() / (float) RAND_MAX)+1;   // Initializes a given vector with values between 1 and 2
+ 		
   }
 }
 
-/**
- * Does a serial calculation of the dot product of the two given vectors
- * @param  vector1 
- * @param  vector2 
- * @return Dot product value of the vectors
- */
+
  Real serial_calculation(Real vector1[], Real vector2[]){
 
  	Real result;
 
  	for(long i=0;i<VECTOR_SIZE;i++){
- 		result += vector1[i] * vector2[i];
+ 		result += vector1[i] * vector2[i];	//serial calculation of the vector dot product
  	}
 
  	return result;
  }
 
-/**
- * prints the value of pi
- * @param pi   calculated value for pi
- * @param from the name of the method that the pi value was calculated. ex- CUDA
- */
- void print_product(Real pi, char *from){
-	#ifdef DP
- 	char *latter=" result = %20.18f\n";
-    #else
- 	char *latter=" result = %f\n";
-    #endif
 
- 	char *to_print = (char *)malloc(\
-			strlen(from)+strlen(latter)+1);//+1 for 0-terminator
- 	strcpy(to_print, from);
- 	strcat(to_print, latter);
- 	printf(to_print,pi);
-
-    // free memory
- 	free(to_print);
-
-
- }
-
-//struct for parameter passing between pthread calls
- struct pthread_arg_struct {
- 	int tid;
- 	int total_threads;
+//defien the the parameters with struct type for the pthread callings
+ struct pthread_arg {
+ 	int thread_id;
+ 	int no_of_threads;
  	Real *vector1;
  	Real *vector2;
  };
@@ -206,9 +76,9 @@ static unsigned long inMB(unsigned long bytes)
 
  void *pthread_calculation(void *arguments){
 
- 	struct pthread_arg_struct *args = (struct pthread_arg_struct *)arguments;
- 	int total_threads = args -> total_threads;
-	int tid = args -> tid;       //obtain the value of thread id
+ 	struct pthread_arg *args = (struct pthread_arg *)arguments;
+ 	int no_of_threads = args -> no_of_threads;
+	int thread_id = args -> thread_id;       //obtain the value of thread id
 	Real *vector1=args -> vector1;
 	Real *vector2=args -> vector2;
 
@@ -216,8 +86,8 @@ static unsigned long inMB(unsigned long bytes)
 	*result=0;
 
 	// calculate the range to be multiplied
-	int chunk_size = VECTOR_SIZE/total_threads;
-	int lowerbound=chunk_size*tid;			// lowest index to be calculated
+	int chunk_size = VECTOR_SIZE/no_of_threads;
+	int lowerbound=chunk_size*thread_id;			// lowest index to be calculated
 	int upperbound=lowerbound+chunk_size-1;	// highest index to be calculated
 
 	for(int i=lowerbound;i<=upperbound;i++){
@@ -225,8 +95,8 @@ static unsigned long inMB(unsigned long bytes)
 	}
 
 	// allocate the leftover vector elements to master
-	if(0==tid && (0!=VECTOR_SIZE%total_threads)){
-		for(int i=chunk_size*total_threads;i<=VECTOR_SIZE;i++){
+	if(0==thread_id && (0!=VECTOR_SIZE%no_of_threads)){
+		for(int i=chunk_size*no_of_threads;i<=VECTOR_SIZE;i++){
 			*result+=vector1[i]*vector2[i];
 		}
 
@@ -236,15 +106,8 @@ static unsigned long inMB(unsigned long bytes)
 
    }
 
-/**
- * Vector dot product code for a single CUDA thread. Function assumes that 
- * the VECTOR_SIZE is completely divisible by CALCS_PER_THREAD
- * 
- * @param vector1 First vector - An array of Real
- * @param vector2 Second vector - An array of Real
- * @param result  Used to return the result - An array of Real
- */
- __global__ void cuda_thread_task(Real *vector1, Real *vector2, Real *result) {
+//Vector dot product code for a single CUDA thread
+ __global__ void cuda_calculation(Real *vector1, Real *vector2, Real *result) {
 
 
  	unsigned long start_point = threadIdx.x + blockDim.x * blockIdx.x;
@@ -312,16 +175,13 @@ int main(int argc, char const *argv[])
 
 	// check the inputs and set the mode
   if(argc<2){
-   print_usage();
+   printf("Incorrect usage of the code!\n");
  }
 	// initialize the vectors
  static Real vector1[VECTOR_SIZE];
  static Real vector2[VECTOR_SIZE];
- initialize_vector(vector1);
- initialize_vector(vector2);
-
-	// print_vector(vector1);
-	// print_vector(vector2);
+ init_vector(vector1);
+ init_vector(vector2);
 
 	// if a serial execution is needed
  if(0==strcmp(argv[1],"-s")){
@@ -334,7 +194,11 @@ int main(int argc, char const *argv[])
 
    comp_time = elapsed_time_msec(&t1, &t2, &sec, &nsec);
    printf("[SERIAL] N=%d: CPU Time(ms)=%.2f \n", VECTOR_SIZE, comp_time);
-   print_product(result,"[SERIAL]");
+	#ifdef DP	
+	printf("CPU SERIAL result(DP) = %20.18f\n", result); 
+	#else
+	printf("CPU SERIAL result = %f\n", result);
+	#endif
  }
 	// if a parallel execution is needed
  else if(0==strcmp(argv[1],"-p")){
@@ -342,7 +206,7 @@ int main(int argc, char const *argv[])
    int num_of_threads;
 		// check whether the given # of threads is valid
    if(argc <3){
-    print_usage();
+    printf("Incorrect usage of the code!\n");
     return -1;
   }
   num_of_threads=atoi(argv[2]);
@@ -361,11 +225,11 @@ int main(int argc, char const *argv[])
 
   //initialize the threads
   for(t=0;t<num_of_threads;t++){
-    struct pthread_arg_struct* args=(\
-     struct pthread_arg_struct*)malloc(sizeof *args);
+    struct pthread_arg* args=(\
+     struct pthread_arg*)malloc(sizeof *args);
 
-    args->total_threads=num_of_threads;
-    args->tid=t;
+    args->no_of_threads=num_of_threads;
+    args->thread_id=t;
     args-> vector1=vector1;
     args-> vector2=vector2;
 
@@ -387,7 +251,12 @@ int main(int argc, char const *argv[])
 
           comp_time = elapsed_time_msec(&t1, &t2, &sec, &nsec);
           printf("[PTHREAD] N=%d: CPU Time(ms)=%.2f \n", VECTOR_SIZE, comp_time);
-          print_product(result,"[PTHREADS]");
+      
+	  #ifdef DP	
+	  printf(" PTHREAD output result(DP) = %20.18f\n", result); 
+	  #else
+	  printf(" PTHREAD output result = %f\n", result);
+	  #endif
 
 
 // if verification needed
@@ -400,7 +269,11 @@ int main(int argc, char const *argv[])
 
             comp_time = elapsed_time_msec(&t1, &t2, &sec, &nsec);
             printf("[SERIAL] N=%d: CPU Time(ms)=%.2f \n", VECTOR_SIZE, comp_time);
-            print_product(result,"[SERIAL]");
+            #ifdef DP	
+	  printf("SERIAL output result(DP) = %20.18f\n", result); 
+	  #else
+	  printf("SERIAL output result = %f\n", result);
+	  #endif
           }
 
         }
@@ -437,7 +310,7 @@ int main(int argc, char const *argv[])
           gpuErrchk(cudaMalloc((void**) &_results, result_size));
 
 		// carry out the calculations
-          cuda_thread_task\
+          cuda_calculation\
           <<<num_of_grids,THREADS_PER_BLOCK>>>(_vector1,_vector2,_results);
 
 		// copy the results back from the device memory to host memory
@@ -461,7 +334,11 @@ int main(int argc, char const *argv[])
     		// }
           }
 
-          print_product(result,"[CUDA]");
+          #ifdef DP	
+	  printf("CUDA output result(DP) = %20.18f\n", result); 
+	  #else
+	  printf("CUDA output result = %f\n", result);
+	  #endif
 
         // if verification needed
           if(argc == 3 &&0==strcmp(argv[2],"-v")){
@@ -473,13 +350,17 @@ int main(int argc, char const *argv[])
 
             comp_time = elapsed_time_msec(&t1, &t2, &sec, &nsec);
             printf("[SERIAL] N=%d: CPU Time(ms)=%.2f \n", VECTOR_SIZE, comp_time);
-            print_product(result,"[SERIAL]");
+            #ifdef DP	
+	  printf("SERIAL output result(DP) = %20.18f\n", result); 
+	  #else
+	  printf("SERIAL output result = %f\n", result);
+	  #endif
           }
 
 
         }
         else{
-         print_usage();
+         printf("Incorrect usage of the code!\n");
        }
        return 0;
      }
